@@ -39,6 +39,7 @@ document.addEventListener('DOMContentLoaded', async function() {
   }
 
   // Error sink persists across replaceWith since it's on window, not the DOM.
+  let __bundlerContentSwapped = false;
   window.addEventListener('error', function(e) {
     // Failed resource loads (CSP-blocked links, scripts, images) fire plain
     // events at the element — warn only; real JS errors carry message/error.
@@ -47,6 +48,11 @@ document.addEventListener('DOMContentLoaded', async function() {
         e.target.tagName, String(e.target.src || e.target.href || ''));
       return;
     }
+    console.error('[bundle]', e.message || e.type, e.filename ? '(' + e.filename + ':' + e.lineno + ')' : '');
+    // Once real page content is live, don't cover it with a developer error
+    // overlay for failures in unused background scripts (e.g. React loaded
+    // generically but never rendered) — just log for diagnostics.
+    if (__bundlerContentSwapped) return;
     var p = document.body || document.documentElement;
     var d = document.getElementById('__bundler_err') || p.appendChild(document.createElement('div'));
     d.id = '__bundler_err';
@@ -160,10 +166,15 @@ document.addEventListener('DOMContentLoaded', async function() {
     // preserve ordering (React before ReactDOM before Babel before text/babel).
     const doc = new DOMParser().parseFromString(template, 'text/html');
     document.documentElement.replaceWith(doc.documentElement);
+    __bundlerContentSwapped = true;
     const dead = Array.from(document.scripts);
     for (const old of dead) {
       const s = document.createElement('script');
       for (const a of old.attributes) s.setAttribute(a.name, a.value);
+      // iOS Safari mutes errors from blob: URL scripts unless explicitly
+      // marked CORS-enabled, even though same-origin per spec — without
+      // this, failures inside React/ReactDOM surface only as "Script error."
+      if (s.src && s.src.indexOf('blob:') === 0) s.crossOrigin = 'anonymous';
       s.textContent = old.textContent;
       // text/babel scripts with a src: read and inline. transformScriptTags
       // does XHR against the src, but blob:null/ from a file:// origin is
